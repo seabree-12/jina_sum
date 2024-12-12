@@ -3,6 +3,8 @@
   "open_ai_api_base": "https://api.openai.com/v1",
   "open_ai_api_key":  "sk-xxx",
   "open_ai_model": "gpt-3.5-turbo",
+  "dashscope_model": "qwen-max",
+  "dashscope_api_key": "sk-xxx",
   "max_words": 8000,
   "white_url_list": [],
   "black_url_list": ["https://support.weixin.qq.com", "https://channels-aladin.wxqcloud.qq.com"],

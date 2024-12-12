@@ -5,6 +5,8 @@ import html
 from urllib.parse import urlparse
 
 import requests
+import dashscope
+from dashscope import Generation
 
 import plugins
 from bridge.context import ContextType
@@ -16,15 +18,17 @@ from plugins import *
     name="JinaSum",
     desire_priority=10,
     hidden=False,
-    desc="Sum url link content with jina reader and llm",
-    version="0.0.1",
-    author="hanfangyuan",
+    desc="Sum url link content with jina reader and LLM models (OpenAI/Tongyi)",
+    version="0.0.2",
+    author="seabree-12",
 )
 class JinaSum(Plugin):
 
     jina_reader_base = "https://r.jina.ai"
     open_ai_api_base = "https://api.openai.com/v1"
     open_ai_model = "gpt-3.5-turbo"
+    dashscope_model = "qwen-max"
+    preferred_api = "openai"  # 默认使用openai
     max_words = 8000
     prompt = "我需要对下面引号内文档进行总结，总结输出包括以下三个部分：\n📖 一句话总结\n🔑 关键要点,用数字序号列出3-5个文章的核心内容\n🏷 标签: #xx #xx\n请使用emoji让你的表达更生动\n\n"
     white_url_list = []
@@ -39,15 +43,43 @@ class JinaSum(Plugin):
             self.config = super().load_config()
             if not self.config:
                 self.config = self._load_config_template()
+            
+            # 基础配置
             self.jina_reader_base = self.config.get("jina_reader_base", self.jina_reader_base)
-            self.open_ai_api_base = self.config.get("open_ai_api_base", self.open_ai_api_base)
-            self.open_ai_api_key = self.config.get("open_ai_api_key", "")
-            self.open_ai_model = self.config.get("open_ai_model", self.open_ai_model)
             self.max_words = self.config.get("max_words", self.max_words)
             self.prompt = self.config.get("prompt", self.prompt)
             self.white_url_list = self.config.get("white_url_list", self.white_url_list)
             self.black_url_list = self.config.get("black_url_list", self.black_url_list)
-            logger.info(f"[JinaSum] inited, config={self.config}")
+            
+            # OpenAI配置
+            self.open_ai_api_base = self.config.get("open_ai_api_base", self.open_ai_api_base)
+            self.open_ai_api_key = self.config.get("open_ai_api_key", "")
+            self.open_ai_model = self.config.get("open_ai_model", self.open_ai_model)
+            
+            # DashScope配置
+            self.dashscope_api_key = self.config.get("dashscope_api_key", "")
+            self.dashscope_model = self.config.get("dashscope_model", self.dashscope_model)
+            if self.dashscope_api_key:
+                dashscope.api_key = self.dashscope_api_key
+            
+            # API选择配置
+            self.preferred_api = self.config.get("preferred_api", self.preferred_api)
+            
+            # 验证API可用性
+            self.available_apis = []
+            if self.open_ai_api_key:
+                self.available_apis.append("openai")
+            if self.dashscope_api_key:
+                self.available_apis.append("dashscope")
+            
+            if not self.available_apis:
+                raise Exception("No available API keys configured")
+            
+            # 如果首选API未配置，使用第一个可用的API
+            if self.preferred_api not in self.available_apis:
+                self.preferred_api = self.available_apis[0]
+                
+            logger.info(f"[JinaSum] inited, preferred_api={self.preferred_api}, available_apis={self.available_apis}")
             self.handlers[Event.ON_HANDLE_CONTEXT] = self.on_handle_context
         except Exception as e:
             logger.error(f"[JinaSum] 初始化异常：{e}")
@@ -68,20 +100,19 @@ class JinaSum(Plugin):
                 channel = e_context["channel"]
                 channel.send(reply, context)
 
-            target_url = html.unescape(content) # 解决公众号卡片链接校验问题，参考 https://github.com/fatwang2/sum4all/commit/b983c49473fc55f13ba2c44e4d8b226db3517c45
+            target_url = html.unescape(content)
             jina_url = self._get_jina_url(target_url)
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"}
             response = requests.get(jina_url, headers=headers, timeout=60)
             response.raise_for_status()
-            target_url_content = response.text
-
-            openai_chat_url = self._get_openai_chat_url()
-            openai_headers = self._get_openai_headers()
-            openai_payload = self._get_openai_payload(target_url_content)
-            logger.debug(f"[JinaSum] openai_chat_url: {openai_chat_url}, openai_headers: {openai_headers}, openai_payload: {openai_payload}")
-            response = requests.post(openai_chat_url, headers=openai_headers, json=openai_payload, timeout=60)
-            response.raise_for_status()
-            result = response.json()['choices'][0]['message']['content']
+            target_url_content = response.text[:self.max_words]
+            
+            # 根据配置选择使用的API
+            if self.preferred_api == "openai" and "openai" in self.available_apis:
+                result = self._summarize_with_openai(target_url_content)
+            else:
+                result = self._summarize_with_dashscope(target_url_content)
+            
             reply = Reply(ReplyType.TEXT, result)
             e_context["reply"] = reply
             e_context.action = EventAction.BREAK_PASS
@@ -97,8 +128,34 @@ class JinaSum(Plugin):
             e_context["reply"] = reply
             e_context.action = EventAction.BREAK_PASS
 
+    def _summarize_with_openai(self, content: str) -> str:
+        """使用OpenAI API进行总结"""
+        openai_chat_url = self._get_openai_chat_url()
+        openai_headers = self._get_openai_headers()
+        openai_payload = self._get_openai_payload(content)
+        
+        response = requests.post(openai_chat_url, headers=openai_headers, json=openai_payload, timeout=60)
+        response.raise_for_status()
+        return response.json()['choices'][0]['message']['content']
+
+    def _summarize_with_dashscope(self, content: str) -> str:
+        """使用DashScope API进行总结"""
+        sum_prompt = f"{self.prompt}\n\n'''{content}'''"
+        response = Generation.call(
+            model=self.dashscope_model,
+            messages=[{'role': 'user', 'content': sum_prompt}],
+            result_format='message',
+        )
+        
+        if response.status_code == 200:
+            return response.output.choices[0]['message']['content']
+        else:
+            raise Exception(f"DashScope API error: {response.code} - {response.message}")
+
     def get_help_text(self, verbose, **kwargs):
-        return f'使用jina reader和ChatGPT总结网页链接内容'
+        apis = ", ".join(self.available_apis)
+        current = self.preferred_api
+        return f'使用jina reader和AI模型（当前使用: {current}, 可用: {apis}）总结网页链接内容'
 
     def _load_config_template(self):
         logger.debug("No Suno plugin config.json, use plugins/jina_sum/config.json.template")
@@ -123,9 +180,8 @@ class JinaSum(Plugin):
             'Host': urlparse(self.open_ai_api_base).netloc
         }
 
-    def _get_openai_payload(self, target_url_content):
-        target_url_content = target_url_content[:self.max_words] # 通过字符串长度简单进行截断
-        sum_prompt = f"{self.prompt}\n\n'''{target_url_content}'''"
+    def _get_openai_payload(self, content: str):
+        sum_prompt = f"{self.prompt}\n\n'''{content}'''"
         messages = [{"role": "user", "content": sum_prompt}]
         payload = {
             'model': self.open_ai_model,

@@ -14,6 +14,8 @@ config.json 配置说明
   "open_ai_api_base": "https://api.openai.com/v1",   # chatgpt chat url
   "open_ai_api_key":  "sk-xxx",                      # chatgpt api key
   "open_ai_model": "gpt-3.5-turbo",                  # chatgpt model
+  "dashscope_model": "qwen-max",                     # qwen model 新版
+  "dashscope_api_key": "sk-xxx",                     # dashscope api key
   "max_words": 8000,                                 # 网页链接内容的最大字数，防止超过最大输入token，使用字符串长度简单计数
   "white_url_list": [],                              # url白名单, 列表为空时不做限制，黑名单优先级大于白名单，即当一个url既在白名单又在黑名单时，黑名单生效
   "black_url_list": ["https://support.weixin.qq.com", "https://channels-aladin.wxqcloud.qq.com"],  # url黑名单，排除不支持总结的视频号等链接
@@ -24,3 +26,5 @@ config.json 配置说明
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=hanfangyuan4396/jina_sum&type=Date)](https://star-history.com/#hanfangyuan4396/jina_sum&Date)
+
+[!在原有的基础上，添加对qwen新版模型的支持，依赖 dashscope 库]
